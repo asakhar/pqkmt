@@ -2,4 +2,5 @@
 ca.*
 server.*
 other.*
+client.*
 Cargo.lock
