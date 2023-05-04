@@ -1,6 +1,3 @@
 /target
-ca.*
-server.*
-other.*
-client.*
 Cargo.lock
+output
