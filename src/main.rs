@@ -1,9 +1,12 @@
-use std::{fs::File, path::PathBuf};
+use std::path::PathBuf;
 
 use clap::Parser;
-use qprov::{keys::{CertificateRequest, CertificateChain}, SecKeyPair, Certificate};
+use qprov::{
+  generate_key_pairs, Certificate, CertificateChain, CertificateRequest, FileSerialize, PubKeyPair,
+  SecKeyPair,
+};
 
-use crate::display::{CertificateRequestDisplay, CertificateChainDisplay, CertificateDisplay};
+use crate::display::{CertificateChainDisplay, CertificateDisplay, CertificateRequestDisplay};
 
 pub mod display;
 
@@ -93,40 +96,72 @@ impl Cli {
   }
 }
 
-fn generate_keys(mut key_path: PathBuf, mut pub_path: Option<PathBuf>) {
-  if let Some(ext) = key_path.extension() {
-    if ext != SEC_EXT {
-      eprintln!(
-        "Invalid extention for private key file: {}",
-        ext.to_string_lossy()
-      );
-      return;
-    }
-  } else {
-    key_path.set_extension(SEC_EXT);
+fn file_meaning_by_ext(ext: &str) -> &'static str {
+  match ext {
+    REQ_EXT => "certificate request",
+    CRT_EXT => "certificate",
+    SEC_EXT => "secret key",
+    PUB_EXT => "public key",
+    CHN_EXT => "certificate chain",
+    _ => "unknown",
   }
-  let pub_path = pub_path.get_or_insert_with(|| {
-    let mut cloned = key_path.clone();
-    cloned.set_extension(PUB_EXT);
-    cloned
-  });
-  if let Some(ext) = pub_path.extension() {
-    if ext != PUB_EXT {
-      eprintln!(
-        "Invalid extention for public key file: {}",
-        ext.to_string_lossy()
-      );
-      return;
-    }
-  } else {
-    pub_path.set_extension(PUB_EXT);
-  }
+}
 
-  let (pub_k, sec_k) = qprov::generate_key_pairs();
-  let key_file = File::create(key_path).expect("Failed to create private key file");
-  bincode::serialize_into(key_file, &sec_k).expect("Failed to write private keys to file");
-  let pub_file = File::create(pub_path).expect("Failed to create public key file");
-  bincode::serialize_into(pub_file, &pub_k).expect("Failed to write public keys to file");
+fn assume_ext_inner(path: &mut PathBuf, target_ext: &str, print: bool) -> bool {
+  if let Some(ext) = path.extension() {
+    if ext != target_ext {
+      if print {
+        eprintln!(
+          "Invalid extention for {} file: {}",
+          file_meaning_by_ext(target_ext),
+          ext.to_string_lossy()
+        );
+      }
+      return false;
+    }
+  } else {
+    path.set_extension(target_ext);
+  }
+  true
+}
+
+fn assume_ext_no_print(path: &mut PathBuf, target_ext: &str) -> bool {
+  assume_ext_inner(path, target_ext, false)
+}
+
+fn assume_ext(path: &mut PathBuf, target_ext: &str) -> bool {
+  assume_ext_inner(path, target_ext, true)
+}
+
+fn name_as(target: Option<PathBuf>, reference: &PathBuf, target_ext: &str) -> Option<PathBuf> {
+  target
+    .map(|mut target| {
+      if assume_ext(&mut target, target_ext) {
+        Some(target)
+      } else {
+        None
+      }
+    })
+    .unwrap_or_else(|| {
+      let mut cloned = reference.clone();
+      cloned.set_extension(target_ext);
+      Some(cloned)
+    })
+}
+
+fn generate_keys(mut key_path: PathBuf, pub_path: Option<PathBuf>) {
+  if !assume_ext(&mut key_path, SEC_EXT) {
+    return;
+  }
+  let Some(pub_path ) = name_as(pub_path, &key_path, PUB_EXT) else {return;};
+
+  let (pub_k, sec_k) = generate_key_pairs();
+  sec_k
+    .to_file(key_path)
+    .expect("Failed to write private keys to file");
+  pub_k
+    .to_file(pub_path)
+    .expect("Failed to write public keys to file");
   println!("Success!");
 }
 
@@ -134,73 +169,30 @@ fn sign_certificate(
   mut req_path: PathBuf,
   mut issuer_chain: Option<PathBuf>,
   mut issuer_priv: PathBuf,
-  mut cert_path: Option<PathBuf>,
+  cert_path: Option<PathBuf>,
 ) {
-  if let Some(ext) = req_path.extension() {
-    if ext != REQ_EXT {
-      eprintln!(
-        "Invalid extention for certificate signing request file: {}",
-        ext.to_string_lossy()
-      );
-      return;
-    }
-  } else {
-    req_path.set_extension(REQ_EXT);
+  if !assume_ext(&mut req_path, REQ_EXT) {
+    return;
   }
-  let cert_path = cert_path.get_or_insert_with(|| {
-    let mut cloned = req_path.clone();
-    cloned.set_extension(CRT_EXT);
-    cloned
-  });
-  if let Some(ext) = cert_path.extension() {
-    if ext != CRT_EXT {
-      eprintln!(
-        "Invalid extention for certificate file: {}",
-        ext.to_string_lossy()
-      );
-      return;
-    }
-  } else {
-    cert_path.set_extension(CRT_EXT);
-  }
+  let Some(cert_path) = name_as(cert_path, &req_path, CRT_EXT) else {return;};
+
   if let Some(issuer_chain) = issuer_chain.as_mut() {
-    if let Some(ext) = issuer_chain.extension() {
-      if ext != CHN_EXT {
-        eprintln!(
-          "Invalid extention for certificate chain file: {}",
-          ext.to_string_lossy()
-        );
-        return;
-      }
-    } else {
-      issuer_chain.set_extension(CHN_EXT);
-    }
-  }
-  if let Some(ext) = issuer_priv.extension() {
-    if ext != SEC_EXT {
-      eprintln!(
-        "Invalid extention for private key file: {}",
-        ext.to_string_lossy()
-      );
+    if !assume_ext(issuer_chain, CHN_EXT) {
       return;
     }
-  } else {
-    issuer_priv.set_extension(SEC_EXT);
   }
-  println!("Choosen req file: {req_path:?}");
+  if !assume_ext(&mut issuer_priv, SEC_EXT) {
+    return;
+  }
+
   println!("Choosen issuer chain file: {issuer_chain:?}");
-  println!("Choosen issuer private key file: {issuer_priv:?}");
-  let req_file = File::open(req_path).expect("Failed to open cerificate signing request file");
-  let issuer_chain_file =
-    issuer_chain.map(|path| File::open(path).expect("Failed to open CA certificate chain file"));
-  let issuer_priv_file = File::open(issuer_priv).expect("Failed to open CA private key file");
-  let output_file = File::create(cert_path).expect("Failed to create certificate file");
-  let issuer_chain: Option<qprov::keys::CertificateChain> = issuer_chain_file.map(|file| {
-    bincode::deserialize_from(file).expect("Failed to read CA certificate chain from file")
+
+  let issuer_chain = issuer_chain.map(|file| {
+    CertificateChain::from_file(file).expect("Failed to read CA certificate chain from file")
   });
-  let issuer_priv_key: SecKeyPair =
-    bincode::deserialize_from(issuer_priv_file).expect("Failed to read CA private key from file");
-  let cert_req: qprov::keys::CertificateRequest = bincode::deserialize_from(req_file)
+  let issuer_priv_key =
+    SecKeyPair::from_file(issuer_priv).expect("Failed to read CA private key from file");
+  let cert_req = CertificateRequest::from_file(req_path)
     .expect("Failed to read certificate signing request from file");
   let issuer = match issuer_chain {
     Some(chain) => chain.get_target().contents.owner.clone(),
@@ -216,42 +208,19 @@ fn sign_certificate(
     }
   };
   let cert = cert_req.sign(issuer, issuer_priv_key.sig_key);
-
-  bincode::serialize_into(output_file, &cert).expect("Failed to write certificate to file");
+  cert
+    .to_file(cert_path)
+    .expect("Failed to write certificate to file");
   println!("Success!");
 }
 
-fn request_singing(mut pub_path: PathBuf, mut req_path: Option<PathBuf>) {
-  if let Some(ext) = pub_path.extension() {
-    if ext != PUB_EXT {
-      eprintln!(
-        "Invalid extention for public key file: {}",
-        ext.to_string_lossy()
-      );
-      return;
-    }
-  } else {
-    pub_path.set_extension(PUB_EXT);
+fn request_singing(mut pub_path: PathBuf, req_path: Option<PathBuf>) {
+  if !assume_ext(&mut pub_path, PUB_EXT) {
+    return;
   }
-  let req_path = req_path.get_or_insert_with(|| {
-    let mut cloned = pub_path.clone();
-    cloned.set_extension(REQ_EXT);
-    cloned
-  });
-  if let Some(ext) = req_path.extension() {
-    if ext != REQ_EXT {
-      eprintln!(
-        "Invalid extention for certificate signing request file: {}",
-        ext.to_string_lossy()
-      );
-      return;
-    }
-  } else {
-    req_path.set_extension(REQ_EXT);
-  }
-  let pub_file = File::open(pub_path).expect("Failed to open public key file");
-  let pub_keys = bincode::deserialize_from(pub_file).expect("Failed to read public key from file");
-  let req_file = File::create(req_path).expect("Failed to create cerificate signing request file");
+  let Some(req_path) = name_as(req_path, &pub_path, REQ_EXT) else {return;};
+
+  let pub_keys = PubKeyPair::from_file(pub_path).expect("Failed to read public key from file");
 
   let mut line = String::new();
   println!("Enter certificate owner name: ");
@@ -260,71 +229,37 @@ fn request_singing(mut pub_path: PathBuf, mut req_path: Option<PathBuf>) {
     println!("Exitting!");
     return;
   };
-  println!("Enter owner's alt names (comma separated): ");
+  line.clear();
+  println!("Enter contract: ");
   std::io::stdin().read_line(&mut line).unwrap();
-  let Some(alt_names) = line.lines().next().map(str::to_owned) else {
+  let Some(contract) = line.lines().next().map(str::to_owned) else {
     println!("Exitting!");
     return;
   };
-  let request = qprov::keys::CertificateRequest::new(pub_keys, owner, alt_names);
-  bincode::serialize_into(req_file, &request).expect("Failed to write certificate request to file");
+  let request = CertificateRequest::new(pub_keys, owner, contract);
+  request
+    .to_file(req_path)
+    .expect("Failed to write certificate request to file");
   println!("Success!");
 }
 
-fn chain(
-  mut cert_path: PathBuf,
-  mut input_chain: Option<PathBuf>,
-  mut output_chain: Option<PathBuf>,
-) {
-  if let Some(ext) = cert_path.extension() {
-    if ext != CRT_EXT {
-      eprintln!(
-        "Invalid extention for certificate file: {}",
-        ext.to_string_lossy()
-      );
-      return;
-    }
-  } else {
-    cert_path.set_extension(CRT_EXT);
+fn chain(mut cert_path: PathBuf, mut input_chain: Option<PathBuf>, output_chain: Option<PathBuf>) {
+  if !assume_ext(&mut cert_path, CRT_EXT) {
+    return;
   }
+
   if let Some(input_chain) = input_chain.as_mut() {
-    if let Some(ext) = input_chain.extension() {
-      if ext != CHN_EXT {
-        eprintln!(
-          "Invalid extention for certificate chain file: {}",
-          ext.to_string_lossy()
-        );
-        return;
-      }
-    } else {
-      input_chain.set_extension(CHN_EXT);
-    }
-  }
-  let output_chain = output_chain.get_or_insert_with(|| {
-    let mut cloned = cert_path.clone();
-    cloned.set_extension(CHN_EXT);
-    cloned
-  });
-  if let Some(ext) = output_chain.extension() {
-    if ext != CHN_EXT {
-      eprintln!(
-        "Invalid extention for certificate chain file: {}",
-        ext.to_string_lossy()
-      );
+    if !assume_ext(input_chain, CHN_EXT) {
       return;
     }
-  } else {
-    output_chain.set_extension(CHN_EXT);
   }
-  let cert_file = File::open(cert_path).expect("Failed to open certificate file");
-  let input_chain_file =
-    input_chain.map(|path| File::open(path).expect("Failed to open parent certificate chain file"));
-  let cert: qprov::Certificate =
-    bincode::deserialize_from(cert_file).expect("Failed to read certificate from file");
-  let input_chain: Option<qprov::keys::CertificateChain> = input_chain_file.map(|file| {
-    bincode::deserialize_from(file).expect("Failed to read parent certificate chain from file")
+  let Some(output_chain) = name_as(output_chain, &cert_path, CHN_EXT) else {return;};
+
+  let cert = Certificate::from_file(cert_path).expect("Failed to read certificate from file");
+  let input_chain = input_chain.map(|file| {
+    CertificateChain::from_file(file).expect("Failed to read parent certificate chain from file")
   });
-  let output_file = File::create(output_chain).expect("Failed to create certificate chain file");
+
   let chain = match input_chain {
     Some(mut chain) => {
       if !chain.append(cert) {
@@ -334,46 +269,49 @@ fn chain(
       chain
     }
     None => {
-      let Some(chain) = qprov::keys::CertificateChain::root(cert) else {
-        eprintln!("Failed to create chain. Certificate is not self-signed");
+      let Some(chain) = CertificateChain::root(cert) else {
+        eprintln!("Failed to start chain. Certificate is not self-signed");
         return;
       };
       chain
     }
   };
-  bincode::serialize_into(output_file, &chain).expect("Failed to write certificate chain to file");
+  chain
+    .to_file(output_chain)
+    .expect("Failed to write certificate chain to file");
   println!("Success!");
 }
 
 fn verify_certificate(mut cert_path: PathBuf, mut issuer_pub: PathBuf) {
-  if let Some(ext) = cert_path.extension() {
-    if ext != CRT_EXT {
-      eprintln!(
-        "Invalid extention for certificate file: {}",
-        ext.to_string_lossy()
-      );
-      return;
-    }
-  } else {
-    cert_path.set_extension(CRT_EXT);
+  if !assume_ext(&mut cert_path, CRT_EXT) {
+    return;
   }
-  if let Some(ext) = issuer_pub.extension() {
-    if ext != "pub" {
-      eprintln!(
-        "Invalid extention for public key file: {}",
-        ext.to_string_lossy()
-      );
-      return;
-    }
-  } else {
-    issuer_pub.set_extension("pub");
+  if !assume_ext_no_print(&mut issuer_pub, PUB_EXT)
+    && !assume_ext_no_print(&mut issuer_pub, CRT_EXT)
+    && !assume_ext(&mut issuer_pub, CHN_EXT)
+  {
+    return;
   }
-  let cert_file = File::open(cert_path).expect("Failed to open certificate file");
-  let issuer_pub_file = File::open(issuer_pub).expect("Failed to open CA public key file");
-  let cert: qprov::Certificate =
-    bincode::deserialize_from(cert_file).expect("Failed to read certificate from file");
-  let pub_key: qprov::PubKeyPair =
-    bincode::deserialize_from(issuer_pub_file).expect("Failed to read CA public key from file");
+
+  let cert = Certificate::from_file(cert_path).expect("Failed to read certificate from file");
+  let pub_key = match issuer_pub.extension().unwrap().to_string_lossy().as_ref() {
+    PUB_EXT => PubKeyPair::from_file(issuer_pub).expect("Failed to read CA public key from file"),
+    CRT_EXT => {
+      Certificate::from_file(issuer_pub)
+        .expect("Failed to read CA certificate from file")
+        .contents
+        .pub_keys
+    }
+    CHN_EXT => {
+      CertificateChain::from_file(issuer_pub)
+        .expect("Failed to read CA certificate chain from file")
+        .get_target()
+        .clone()
+        .contents
+        .pub_keys
+    }
+    _ => unreachable!(),
+  };
   let message = if cert.verify(&pub_key.sig_key) {
     "Certificate is valid"
   } else {
@@ -386,31 +324,30 @@ fn show(file_path: PathBuf) {
   let Some(ext) = file_path.extension() else {
     panic!("File extension not found: {file_path:?}");
   };
-  let file = std::fs::File::open(&file_path).expect("File not found");
+  std::fs::File::open(&file_path).expect("File not found");
   match ext.to_string_lossy().as_ref() {
     REQ_EXT => {
-      let request: CertificateRequest =
-        bincode::deserialize_from(file).expect("Failed to parse certificate request file");
+      let request =
+        CertificateRequest::from_file(file_path).expect("Failed to parse certificate request file");
       println!("Certificate request file:");
       let display: CertificateRequestDisplay = request.into();
       serde_json::to_writer_pretty(std::io::stdout(), &display)
         .expect("Failed to serialize certificate request");
     }
     CRT_EXT => {
-      let cert: Certificate =
-      bincode::deserialize_from(file).expect("Failed to parse certificate file");
-    println!("Certificate file:");
-    let display: CertificateDisplay = cert.into();
-    serde_json::to_writer_pretty(std::io::stdout(), &display)
-      .expect("Failed to serialize certificate");
+      let cert = Certificate::from_file(file_path).expect("Failed to parse certificate file");
+      println!("Certificate file:");
+      let display: CertificateDisplay = cert.into();
+      serde_json::to_writer_pretty(std::io::stdout(), &display)
+        .expect("Failed to serialize certificate");
     }
     CHN_EXT => {
-      let chain: CertificateChain =
-      bincode::deserialize_from(file).expect("Failed to parse certificate chain file");
-    println!("Certificate chain file:");
-    let display: CertificateChainDisplay = chain.into();
-    serde_json::to_writer_pretty(std::io::stdout(), &display)
-      .expect("Failed to serialize certificate chain");
+      let chain =
+        CertificateChain::from_file(file_path).expect("Failed to parse certificate chain file");
+      println!("Certificate chain file:");
+      let display: CertificateChainDisplay = chain.into();
+      serde_json::to_writer_pretty(std::io::stdout(), &display)
+        .expect("Failed to serialize certificate chain");
     }
     _ => {
       unimplemented!()
