@@ -207,7 +207,10 @@ fn sign_certificate(
       issuer
     }
   };
-  let cert = cert_req.sign(issuer, issuer_priv_key.sig_key);
+  let Some(cert) = cert_req.sign(issuer, issuer_priv_key) else {
+    eprintln!("Failed to sign certificate");
+    return;
+  };
   cert
     .to_file(cert_path)
     .expect("Failed to write certificate to file");
@@ -312,7 +315,7 @@ fn verify_certificate(mut cert_path: PathBuf, mut issuer_pub: PathBuf) {
     }
     _ => unreachable!(),
   };
-  let message = if cert.verify(&pub_key.sig_key) {
+  let message = if cert.verify(&pub_key) {
     "Certificate is valid"
   } else {
     "Invalid certificate"
