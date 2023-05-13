@@ -29,18 +29,21 @@ struct Cli {
 
 #[derive(Debug, clap::Subcommand)]
 enum Commands {
+  /// Generates key pair
   Generate {
     #[arg()]
     key_path: PathBuf,
     #[arg()]
     pub_path: Option<PathBuf>,
   },
+  /// Requests certificate signing
   Request {
     #[arg()]
     pub_path: PathBuf,
     #[arg()]
     req_path: Option<PathBuf>,
   },
+  /// Signs requested cerificate
   Sign {
     #[arg()]
     req_path: PathBuf,
@@ -51,6 +54,7 @@ enum Commands {
     #[arg()]
     issuer_chain: Option<PathBuf>,
   },
+  /// Creates or appends to certificate chain
   Chain {
     #[arg()]
     cert_path: PathBuf,
@@ -59,12 +63,14 @@ enum Commands {
     #[arg()]
     output_chain: Option<PathBuf>,
   },
+  /// Verifies certificate by issuer's public key
   Verify {
     #[arg()]
     cert_path: PathBuf,
     #[arg()]
     issuer_pub: PathBuf,
   },
+  /// Displays file contents
   Show {
     #[arg()]
     file_path: PathBuf,
